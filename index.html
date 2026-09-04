@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PLI — banc d'essai</title>
+
+<!-- BANC D'ESSAI, PAS LA PAGE.
+
+     Fin de semaine 1 : une étagère générée, éclairée, qu'on peut tourner.
+     « Laide en interface, correcte en rendu » — le brief le dit, et c'est
+     volontaire. L'interface arrive en semaine 3 ; s'en occuper maintenant
+     serait décorer une scène dont on n'a pas encore prouvé qu'elle tient
+     soixante images par seconde. -->
+
+<style>
+  :root{
+    --atelier:#151719;
+    --papier:#F2F1ED;
+    --acier:#8A9196;
+    --chene:#C89B62;
+    --pli:#D8452F;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; }
+  body{
+    margin:0; background:var(--atelier); color:var(--papier);
+    font:14px/1.5 ui-monospace, 'Space Mono', monospace;
+    display:grid; grid-template-rows:1fr auto;
+  }
+  #scene{ display:block; width:100%; height:100%; touch-action:none; cursor:grab; outline:none; }
+  #scene.tenue{ cursor:grabbing; }
+  #scene:focus-visible{ outline:2px solid var(--pli); outline-offset:-2px; }
+
+  .banc{
+    background:var(--papier); color:#1E2124;
+    padding:14px 16px; display:flex; flex-wrap:wrap; gap:16px 26px; align-items:center;
+    border-top:2px solid var(--pli);
+  }
+  fieldset{ border:0; margin:0; padding:0; display:flex; gap:8px; align-items:center; }
+  legend{ display:contents; }
+  .etiquette{ font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:#5C6469; }
+  label{ cursor:pointer; }
+  input[type=radio]{ position:absolute; opacity:0; pointer-events:none; }
+  input[type=radio] + span{
+    display:inline-block; min-width:28px; text-align:center;
+    padding:4px 8px; border:1px solid #C9C6BE; border-radius:2px; background:#fff;
+  }
+  input[type=radio]:checked + span{ background:var(--pli); border-color:var(--pli); color:#fff; }
+  input[type=radio]:focus-visible + span{ outline:2px solid #1E2124; outline-offset:2px; }
+
+  .mesures{ margin-left:auto; display:flex; gap:20px; font-variant-numeric:tabular-nums; }
+  .mesures b{ font-weight:400; color:#5C6469; font-size:11px; letter-spacing:.1em; text-transform:uppercase; display:block; }
+  .sans-webgl{ padding:40px; color:var(--papier); }
+</style>
+</head>
+<body>
+
+<canvas id="scene" tabindex="0" role="img"
+        aria-label="Étagère PLI en trois dimensions. Faites glisser horizontalement, ou utilisez les flèches gauche et droite, pour la faire tourner."></canvas>
+
+<div class="banc">
+  <fieldset id="f-colonnes"><legend class="etiquette">Colonnes</legend></fieldset>
+  <fieldset id="f-rangees"><legend class="etiquette">Rangées</legend></fieldset>
+  <fieldset id="f-acier"><legend class="etiquette">Acier</legend></fieldset>
+  <fieldset id="f-tablette"><legend class="etiquette">Tablettes</legend></fieldset>
+
+  <div class="mesures">
+    <div><b>Dimensions</b><span id="m-dim">—</span></div>
+    <div><b>Modules</b><span id="m-mod">—</span></div>
+    <div><b>Appels</b><span id="m-app">—</span></div>
+  </div>
+</div>
+
+<script type="module" src="/src/banc.js"></script>
+</body>
+</html>
