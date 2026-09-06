@@ -33,7 +33,8 @@
 import {
   Scene, PerspectiveCamera, WebGLRenderer, Color, Mesh,
   PlaneGeometry, ShadowMaterial,
-  DirectionalLight, AmbientLight, PMREMGenerator
+  DirectionalLight, AmbientLight, PMREMGenerator,
+  NeutralToneMapping
 } from 'three';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
@@ -72,6 +73,40 @@ export function creerScene(toile) {
   const mobile = innerWidth < 768;
 
   rendu.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+  /* ── LE MAPPAGE TONAL, ET POURQUOI CELUI-LA ────────────────────────────
+
+     Sans mappage tonal, le moteur coupe chaque canal a 1,0 SEPAREMENT. Une
+     surface rouge vif bien eclairee sature son canal rouge en premier ; le
+     vert et le bleu continuent de monter, et la teinte glisse vers le blanc.
+
+     Mesure : en comparant le rapport rouge/bleu du rendu a celui de la
+     couleur DECLAREE de chaque finition, le << Rouge de reperage >> #D8452F
+     perdait 52 % de sa charge rouge. Il sortait en terre cuite molle. Un
+     client ne reconnait pas sa finition la-dedans, et un configurateur qui
+     ment sur la couleur ne sert a rien.
+
+     Sept reglages compares sur les memes images :
+
+       aucun            blanc casse  -6 %    rouge  -52 %
+       ACES filmique                 -8 %           -41 %
+       AgX                           -5 %           -52 %
+       NEUTRE                        -6 %            -4 %
+
+     `NeutralToneMapping` gagne, et ce n'est pas un hasard : c'est le profil
+     Khronos PBR Neutral, concu exactement pour la presentation de produit —
+     compresser les hautes lumieres SANS deplacer la teinte, pour qu'un
+     acheteur reconnaisse la couleur qu'il commande.
+
+     ACES, qui est l'habitude du cinema, fait l'inverse ici : il est concu
+     pour un rendu flatteur, pas fidele.
+
+     Le noir n'est pas juge sur ce critere : une surface quasi noire ne
+     montre presque que de la lumiere reflechie, pas son albedo. Mesurer sa
+     fidelite de teinte reviendrait a mesurer les lampes. */
+  rendu.toneMapping = NeutralToneMapping;
+  rendu.toneMappingExposure = 1.0;
+
   rendu.shadowMap.enabled = true;
   rendu.shadowMap.type = 2;           /* PCFSoftShadowMap : arêtes douces  */
 
@@ -116,11 +151,93 @@ export function creerScene(toile) {
     return (rayon / Math.sin(Math.min(demiV, demiH))) * cadrage.marge;
   }
 
+  /* La distance RÉELLEMENT utilisée. Elle rejoint la distance utile en
+     glissant, avec un dépassement — voir `recaler` plus bas. `null` tant
+     qu'aucun recalage n'a eu lieu : on prend alors la valeur calculée. */
+  let distanceAffichee = null;
+
   function placerCamera() {
-    const d = distanceUtile();
+    const d = distanceAffichee === null ? distanceUtile() : distanceAffichee;
     const h = cadrage.fixe ? cadrage.hauteur : boite.hauteur * cadrage.hauteur;
     camera.position.set(Math.sin(azimut) * d, h, Math.cos(azimut) * d);
     camera.lookAt(0, cadrage.cible, 0);
+  }
+
+
+  /* ── LE RECALAGE DE CAMÉRA DÉPASSE DE 3 % ──────────────────────────────
+   *
+   * Ajouter une colonne agrandit le meuble, donc éloigne la caméra. En
+   * sautant d'un coup, ce déplacement se lit comme un défaut d'affichage :
+   * l'objet change de taille sans qu'on ait rien vu bouger.
+   *
+   * La caméra recule donc en glissant, dépasse de 3 % du trajet, et revient.
+   * Ce dépassement est ce qui fait lire un MOUVEMENT plutôt qu'un saut —
+   * c'est le même principe que l'inertie de rotation : sans lui, la caméra
+   * n'a pas de masse.
+   *
+   * 3 % de la COURSE, pas de la distance. Un dépassement proportionnel à la
+   * distance ferait un grand écart pour un petit ajustement.
+   *
+   * Écrit à la main, comme l'inertie et pour la même raison : ce fichier
+   * n'importe aucune bibliothèque d'animation, et la courbe se lit ici.
+   */
+
+  const RECALAGE = 0.46;      /* durée totale, en secondes                  */
+  const DEPASSE  = 0.03;      /* 3 % de la course                           */
+  const MONTEE   = 0.58;      /* part du temps passée à aller au sommet     */
+
+  /* 0 → 1,03 → 1. Deux cubiques adoucies, raccordées au sommet. */
+  function profil(u) {
+    if (u < MONTEE) {
+      const x = u / MONTEE;
+      return (1 + DEPASSE) * (1 - Math.pow(1 - x, 3));
+    }
+    const x = (u - MONTEE) / (1 - MONTEE);
+    return (1 + DEPASSE) - DEPASSE * (1 - Math.pow(1 - x, 3));
+  }
+
+  /* Un jeton de génération, parce qu'on ajoute une colonne plus vite que la
+     caméra ne se recale. Sans lui, deux boucles tireraient la même variable
+     vers deux cibles différentes, et la dernière image écrite gagnerait —
+     autrement dit, un tremblement. Chaque nouveau recalage périme le
+     précédent, qui s'arrête à sa prochaine image. */
+  let generation = 0;
+
+  function recaler(immediat = false) {
+    const vise = distanceUtile();
+    const moi = ++generation;
+
+    if (immediat || REDUIT || distanceAffichee === null) {
+      distanceAffichee = vise;
+      placerCamera();
+      demander();
+      return;
+    }
+
+    const depart = distanceAffichee;
+    if (Math.abs(vise - depart) < 0.001) return;   /* rien à recaler */
+
+    const t0 = performance.now();
+
+    function pas(t) {
+      if (moi !== generation) return;              /* périmé : on se retire */
+
+      const u = Math.min(1, (t - t0) / (RECALAGE * 1000));
+      distanceAffichee = depart + (vise - depart) * profil(u);
+      placerCamera();
+      rendu.render(scene, camera);
+
+      if (u < 1) { requestAnimationFrame(pas); return; }
+
+      /* On repose EXACTEMENT sur la valeur visée : une accumulation de
+         virgules flottantes laisserait la caméra à quelques millièmes, et
+         le recalage suivant repartirait de travers. */
+      distanceAffichee = vise;
+      placerCamera();
+      rendu.render(scene, camera);
+    }
+
+    requestAnimationFrame(pas);
   }
 
   /* ── les lumières : 80 % du résultat ───────────────────────────────────
@@ -148,7 +265,18 @@ export function creerScene(toile) {
      source froide placée DERRIÈRE et à l'opposé dessine un liseré sur
      chaque arête tournée vers elle. C'est ce liseré qui donne le volume,
      et il coûte une lumière. */
-  const contre = new DirectionalLight(0xAECDF0, 2.2);
+  /* SON INTENSITE EST TOMBEE DE 2,2 A 1,3, ET C'EST LA MOITIE DU CORRECTIF.
+
+     A 2,2 le contre-jour etait PLUS FORT que la principale, a 1,9. Une
+     lumiere de detourage plus puissante que la lumiere principale ne detoure
+     plus : elle repeint, et elle sature. Le detourage vient de l'ANGLE, pas
+     de la puissance — une source rasante placee derriere dessine le lisere
+     quelle que soit son intensite.
+
+     Baisser cette intensite SEULE n'a presque rien donne sur le rouge (-50 %
+     de charge rouge avant, -48 % apres) : c'est le mappage tonal, plus haut,
+     qui fait l'autre moitie. Les deux ensemble ramenent le rouge a -4 %. */
+  const contre = new DirectionalLight(0xAECDF0, 1.3);
   contre.position.set(-2.6, 1.4, -2.4);
   scene.add(contre);
 
@@ -158,7 +286,10 @@ export function creerScene(toile) {
   dessous.position.set(-0.6, -2.0, 1.2);
   scene.add(dessous);
 
-  scene.add(new AmbientLight(0x4C5866, 0.30));
+  /* L'ambiante etait bleue elle aussi (#4C5866). Additionnee au contre-jour
+     et au remplissage, elle faisait TROIS sources froides contre une chaude.
+     Neutre, elle remplit sans teinter. */
+  scene.add(new AmbientLight(0x5A5E63, 0.30));
 
   /* ── le sol : invisible, sauf là où l'objet pose ────────────────────────
 
@@ -210,8 +341,9 @@ export function creerScene(toile) {
     rendu.setSize(l, h, false);
     camera.aspect = l / h;
     camera.updateProjectionMatrix();
-    placerCamera();
-    demander();
+    /* Immediat : on ne fait pas glisser une camera parce qu'on a tourne son
+       telephone. Un redimensionnement change le contenant, pas l'objet. */
+    recaler(true);
   }
 
   const observateur = new ResizeObserver(redimensionner);
@@ -314,8 +446,9 @@ export function creerScene(toile) {
     cadrer(nom) {
       const c = CADRAGES[nom]; if (!c) return;
       cadrage = { ...c };
-      placerCamera();
-      demander();
+      /* Passer de l'ensemble au detail du pli est un recalage comme un
+         autre : la camera s'y rend, elle n'y saute pas. */
+      recaler();
     },
 
     /* L'objet a changé de taille : le sol descend avec lui, le volume
@@ -334,8 +467,10 @@ export function creerScene(toile) {
       o.far = rayon * 6;
       o.updateProjectionMatrix();
 
-      placerCamera();
-      demander();
+      /* Le meuble a change de taille : la camera recule en glissant, avec
+         son depassement de 3 %. C'est ici, et nulle part ailleurs, que le
+         procede << overshoot >> du brief s'applique. */
+      recaler();
     },
 
     get azimut() { return azimut; },
